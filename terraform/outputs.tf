@@ -9,14 +9,11 @@ output "ssh_command" {
 }
 
 output "application_url" {
-  description = "Adresse de l'application une fois Ansible passé."
+  description = "Adresse HTTP de l'application."
   value       = "http://${aws_eip.app.public_ip}/"
 }
 
-output "ansible_inventory" {
-  description = "Inventaire Ansible à écrire dans ansible/inventory.ini."
-  value       = <<-EOT
-    [app]
-    ${aws_eip.app.public_ip} ansible_user=ubuntu
-  EOT
+output "security_group_id" {
+  description = "Security group à renseigner dans le secret GitHub EC2_SECURITY_GROUP_ID."
+  value       = aws_security_group.app.id
 }

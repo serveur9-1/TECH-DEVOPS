@@ -32,12 +32,7 @@ crash.log
 override.tf
 override.tf.json
 
-# Ansible
-# L'inventaire désigne un serveur réel ; le reste est généré ou sensible.
-ansible/inventory.ini
 *.retry
-vault-password
-.vault_pass
 
 # Clés et certificats
 *.pem
