@@ -118,7 +118,7 @@ jobs:
       # Dépendances vulnérables, secrets en clair et mauvaises configurations
       # dans les Dockerfile, les fichiers Compose et le code Terraform.
       - name: Trivy — système de fichiers
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -136,7 +136,7 @@ jobs:
           category: trivy-fs
 
       - name: Trivy — échec sur vulnérabilité critique corrigeable
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -180,7 +180,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       - name: Trivy — analyse de l'image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: task-manager-${{ matrix.name }}:ci
