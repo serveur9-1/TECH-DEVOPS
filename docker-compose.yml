@@ -9,8 +9,8 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tasks}
       POSTGRES_USER: ${POSTGRES_USER:-tasks}
-      # Valeur de confort pour le développement. En production, Ansible génère
-      # un mot de passe aléatoire dans /opt/task-manager/.env.
+      # Valeur de confort pour le développement. En production, GitHub Actions
+      # crée /opt/task-manager/.env au premier déploiement.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasks}
     volumes:
       - db-data:/var/lib/postgresql/data

@@ -12,4 +12,3 @@ COPY frontend/index.html frontend/style.css frontend/app.js frontend/favicon.svg
      /usr/share/nginx/html/
 
 EXPOSE 80
-EXPOSE 443
