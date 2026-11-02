@@ -1,5 +1,2 @@
-# Labels des runners auto-hébergés, pour qu'actionlint ne les signale pas
-# comme inconnus.
-self-hosted-runner:
-  labels:
-    - app-deploy
+# Fichier conservé pour actionlint. Plus de runner self-hosted.
+{}

@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
   workflow_dispatch:
 
 permissions:
@@ -61,13 +61,6 @@ jobs:
           terraform fmt -check -recursive
           terraform init -backend=false -input=false
           terraform validate
-
-      - name: Ansible — contrôle syntaxique du playbook
-        working-directory: ansible
-        run: |
-          pip install ansible-core
-          cp inventory.ini.example inventory.ini
-          ansible-playbook --syntax-check playbook.yml
 
   test:
     name: Tests backend
@@ -201,7 +194,9 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Publier l'image
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: >-
+          github.event_name != 'pull_request' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/'))
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -216,21 +211,87 @@ jobs:
   deploy:
     name: Déploiement
     needs: build
-    # Runner auto-hébergé sur la VM : aucun port entrant à ouvrir pour la CI,
-    # c'est le runner qui sort vers GitHub.
-    runs-on: [self-hosted, Linux, X64, app-deploy]
-    # Désactivé tant que la variable de dépôt DEPLOY_ENABLED ne vaut pas
-    # "true" : le job est ignoré sans faire échouer la pipeline.
+    runs-on: ubuntu-latest
     if: >-
-      github.ref == 'refs/heads/main' &&
       github.event_name != 'pull_request' &&
-      vars.DEPLOY_ENABLED == 'true'
-    environment: production
-    # Pas de checkout : rien de ce qui tourne en root ne vient d'une branche.
+      vars.DEPLOY_ENABLED == 'true' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/'))
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-3' }}
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ secrets.EC2_USER }}
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Autoriser SSH depuis l'IP du runner
+        id: sg
+        run: |
+          set -euo pipefail
+          IP=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "runner_ip=$IP" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${{ secrets.EC2_SECURITY_GROUP_ID }}" \
+            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${IP}/32,Description=gha-temp}]" \
+            || true
+          sleep 5
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Copier Compose, Nginx et le script
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          ssh "$EC2_USER@$EC2_HOST" 'sudo mkdir -p /opt/task-manager/nginx && sudo chown -R ubuntu:ubuntu /opt/task-manager'
+          scp docker-compose.prod.yml "$EC2_USER@$EC2_HOST:/opt/task-manager/docker-compose.prod.yml"
+          scp nginx/default.conf "$EC2_USER@$EC2_HOST:/opt/task-manager/nginx/default.conf"
+          scp scripts/ec2-deploy.sh "$EC2_USER@$EC2_HOST:/opt/task-manager/ec2-deploy.sh"
+          ssh "$EC2_USER@$EC2_HOST" 'chmod 700 /opt/task-manager/ec2-deploy.sh'
+
       - name: Déployer le tag ${{ github.sha }}
         env:
           IMAGE_TAG: ${{ github.sha }}
-        # Seule commande privilégiée autorisée par /etc/sudoers.d. Le tag passe
-        # par l'environnement, et le script revalide sa valeur.
-        run: sudo -n /usr/local/sbin/task-manager-deploy "$IMAGE_TAG"
+          REGISTRY_NAMESPACE: ${{ env.REGISTRY_NAMESPACE }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          DEPLOY_ENV=$(mktemp)
+          {
+            printf 'export IMAGE_TAG=%q\n' "$IMAGE_TAG"
+            printf 'export REGISTRY_NAMESPACE=%q\n' "$REGISTRY_NAMESPACE"
+            printf 'export POSTGRES_PASSWORD=%q\n' "$POSTGRES_PASSWORD"
+            printf 'export DOCKERHUB_USERNAME=%q\n' "$DOCKERHUB_USERNAME"
+            printf 'export DOCKERHUB_TOKEN=%q\n' "$DOCKERHUB_TOKEN"
+          } > "$DEPLOY_ENV"
+          scp "$DEPLOY_ENV" "$EC2_USER@$EC2_HOST:/opt/task-manager/.deploy.env"
+          rm -f "$DEPLOY_ENV"
+          ssh "$EC2_USER@$EC2_HOST" \
+            'chmod 600 /opt/task-manager/.deploy.env && set -a && . /opt/task-manager/.deploy.env && set +a && rm -f /opt/task-manager/.deploy.env && /opt/task-manager/ec2-deploy.sh'
+
+      - name: Vérifier HTTP
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 10 --retry-delay 3 --max-time 5 "http://$EC2_HOST/healthz"
+          curl -fsS --max-time 5 "http://$EC2_HOST/api/health"
+
+      - name: Retirer l'accès SSH temporaire
+        if: always()
+        run: |
+          set -euo pipefail
+          IP="${{ steps.sg.outputs.runner_ip }}"
+          [ -n "$IP" ] || exit 0
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${{ secrets.EC2_SECURITY_GROUP_ID }}" \
+            --protocol tcp --port 22 --cidr "${IP}/32" \
+            || true

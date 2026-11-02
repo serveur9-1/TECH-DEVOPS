@@ -7,8 +7,7 @@
 # L'image Nginx n'a besoin de rien de tout cela.
 backend
 terraform
-ansible
-deploy
+scripts
 load-tests
 
 # Python
