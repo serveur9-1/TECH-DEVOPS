@@ -25,7 +25,7 @@ flowchart TB
   VPC --> Subnet[subnet public 10.0.1.0/24]
   Subnet --> EC2[t3.micro eu-west-3]
   SG[Security Group]
-  SG -->|"22 depuis ssh_allowed_cidrs + IP runner le temps du job"| EC2
+  SG -->|"22 depuis ssh_allowed_cidrs"| EC2
   SG -->|"80 ouvert"| EC2
   EC2 --> Nginx[nginx :80]
   Nginx -->|"/api/"| API[FastAPI :8000]
@@ -33,8 +33,8 @@ flowchart TB
 ```
 
 Terraform crée le réseau et la VM. GitHub Actions teste, scanne, publie les
-images, ouvre le SSH à l'IP du runner, copie Compose, lance la pile, vérifie
-HTTP, puis retire la règle SSH. Ansible n'est pas utilisé.
+images, puis déploie par SSH et Docker Compose. Ansible n'est pas utilisé.
+Le mot de passe PostgreSQL est généré sur l'EC2, pas dans GitHub.
 
 ### Structure
 
@@ -88,45 +88,42 @@ manuellement).
 | Tests backend | `ubuntu-24.04` | pytest + PostgreSQL |
 | Analyse de sécurité | `ubuntu-24.04` | Trivy fs, bloque sur CRITICAL corrigeable |
 | Images | `ubuntu-24.04` | build, Trivy image CRITICAL, push `main` |
-| Déploiement | `ubuntu-latest` | SSH + Compose, si `DEPLOY_ENABLED=true` |
+| Déploiement | `ubuntu-latest` | SSH + Compose, sur `main` seulement |
 
 Sur une Pull Request : tests et build, **aucune** publication, **aucun** SSH.
 
-Sur `main` et `feature/**` : publication
+Sur `main` : publication
 
 ```
 serveur91225/task-manager-backend:latest|<sha>
 serveur91225/task-manager-frontend:latest|<sha>
 ```
 
-puis, si `DEPLOY_ENABLED` vaut `true` (y compris depuis une branche `feature/**`) :
+puis déploiement SSH :
 
-1. Autoriser tcp/22 depuis l'IP du runner (`description=gha-temp`), pas `0.0.0.0/0`.
-2. Copier `docker-compose.prod.yml`, `nginx/default.conf`, `scripts/ec2-deploy.sh`.
-3. Créer `.env` au premier run (mot de passe depuis le secret, non réaffiché).
-4. `docker compose pull && up -d` avec `IMAGE_TAG=$GITHUB_SHA`.
-5. `curl` `/healthz` et `/api/health`.
-6. Retirer la règle SSH (`if: always()`).
+1. Copier `docker-compose.prod.yml`, `nginx/default.conf`, `scripts/ec2-deploy.sh`.
+2. Créer `/opt/task-manager/.env` au premier run (mot de passe généré sur l'EC2, mode 0600).
+3. `docker compose pull && up -d` avec `IMAGE_TAG=$GITHUB_SHA`.
+4. `curl` HTTP `/healthz` et `/api/health`.
 
-### Secrets et variables (noms seulement)
+### Secrets (noms seulement)
 
 | Type | Nom |
 |---|---|
-| Variable | `REGISTRY_NAMESPACE` = `serveur91225` |
-| Variable | `DEPLOY_ENABLED` = `true` pour activer le job |
-| Variable | `AWS_REGION` (défaut `eu-west-3`) |
-| Secret | `DOCKERHUB_USERNAME` |
+| Secret | `DOCKERHUB_USERNAME` (`serveur91225`, sert aussi de namespace d'images) |
 | Secret | `DOCKERHUB_TOKEN` |
-| Secret | `EC2_HOST` |
+| Secret | `EC2_HOST` (`15.237.21.24`) |
 | Secret | `EC2_USER` (`ubuntu`) |
-| Secret | `EC2_SSH_KEY` (clé privée du key pair Terraform) |
-| Secret | `AWS_ACCESS_KEY_ID` |
-| Secret | `AWS_SECRET_ACCESS_KEY` |
-| Secret | `EC2_SECURITY_GROUP_ID` (`terraform output security_group_id`) |
-| Secret | `POSTGRES_PASSWORD` |
+| Secret | `EC2_SSH_KEY` |
 
-`ubuntu` doit pouvoir `sudo` sans mot de passe (AMI Ubuntu AWS). Les commandes
-Docker passent par `sudo docker`, sans ajouter l'utilisateur au groupe `docker`.
+Pas de secrets AWS ni PostgreSQL. `ubuntu` utilise `sudo docker` (AMI Ubuntu).
+
+### SSH depuis GitHub Actions
+
+Le Security Group n'autorise le port 22 que depuis `ssh_allowed_cidrs` (ton IP).
+Les runners `ubuntu-latest` ont une IP Azure dynamique : **ils ne joignent pas
+le SSH tant que le Security Group reste ainsi**. On n'ouvre pas `0.0.0.0/0`.
+Le premier test se fait depuis ton PC, déjà autorisé.
 
 ## Rollback
 
@@ -144,8 +141,9 @@ sudo docker compose -f /opt/task-manager/docker-compose.prod.yml up -d --no-buil
 
 - **t3.micro (1 Gio RAM)** : la pile tient grâce à 2 Gio de swap. Pas de runner
   GitHub sur la VM.
-- **SSH** : fermé à Internet. Seule votre IP Terraform, plus l'IP du runner
-  pendant le job.
+- **SSH** : fermé à Internet par Terraform (ton IP uniquement). GitHub Actions
+  n'atteint pas le port 22 tant que le Security Group reste inchangé. On n'ouvre
+  pas `0.0.0.0/0`.
 - **HTTPS / Let's Encrypt / Certbot** : non configurés dans cette démonstration.
   L'application est servie en HTTP sur le port 80 uniquement.
 - Une instance, pas de sauvegarde Postgres, logs via `docker logs`.
