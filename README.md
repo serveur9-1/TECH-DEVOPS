@@ -25,25 +25,41 @@ Pas d'ORM, pas de framework frontend, pas d'étape de build côté navigateur.
 
 ## Architecture
 
-Trois outils se partagent le travail. Terraform crée la machine et rien
-d'autre. Ansible la configure. GitHub Actions ne fait que remplacer des images.
+Trois outils se partagent le travail. Terraform crée le réseau et la machine.
+Ansible configure le serveur. GitHub Actions ne fait que remplacer des images.
 
 ```
-Terraform ──► VM + pare-feu + IP fixe
+Terraform ──► VPC public + IGW + EC2 + SG + IP fixe (EIP)
                    │
 Ansible ──────────►│ Docker, /opt/task-manager, secrets, certificat TLS
                    │
 GitHub Actions ───►│ docker compose pull && up -d
 ```
 
-L'application sur le serveur :
+Le réseau AWS, créé même sur un compte sans VPC par défaut :
+
+```
+ Internet
+    │  80/443 ouverts ; 22 limité à ssh_allowed_cidrs
+    ▼
+ EIP (IP publique fixe)
+    │
+ Internet Gateway
+    │
+ VPC 10.0.0.0/16
+    └── subnet public 10.0.1.0/24 ──► route 0.0.0.0/0 → IGW
+            │
+            └── EC2 Ubuntu 24.04  t3.micro  IMDSv2  disque gp3 chiffré
+```
+
+L'application sur cette instance :
 
 ```
                          Navigateur
                              │
-                             │  443 (HTTPS) — le 80 redirige
+                             │  80 (HTTP) ou 443 (HTTPS, le 80 redirige)
                              ▼
- ┌─── VM Ubuntu 24.04 ───────────────────────────────────────┐
+ ┌─── EC2 Ubuntu 24.04 ──────────────────────────────────────┐
  │                                                           │
  │  ┌──────────────────┐         ┌──────────────────────┐    │
  │  │ frontend         │  /api/  │ backend              │    │
@@ -76,7 +92,7 @@ aucune URL d'API codée en dur dans le frontend.
 backend/        main.py, conftest.py, test_main.py (14 tests), Dockerfile
 frontend/       index.html, style.css, app.js, Dockerfile Nginx
 nginx/          default.conf — reverse proxy et en-têtes de sécurité
-terraform/      VM, groupe de sécurité, IP fixe
+terraform/      VPC public, EC2, groupe de sécurité, IP fixe
 ansible/        playbook de configuration et gabarits
 deploy/         script de déploiement privilégié et règle sudoers
 load-tests/     scripts k6
@@ -160,8 +176,9 @@ terraform init
 terraform apply
 ```
 
-Une instance Ubuntu 24.04 dans le VPC par défaut, une IP fixe, et un groupe de
-sécurité qui n'ouvre que 80, 443 et 22. Ce dernier est limité à vos adresses :
+Une instance Ubuntu 24.04 dans un VPC créé par Terraform (subnet public +
+Internet Gateway), une IP fixe, et un groupe de sécurité qui n'ouvre que 80,
+443 et 22. Ce dernier est limité à vos adresses :
 une règle de validation refuse `0.0.0.0/0`. Disque racine chiffré, IMDSv2
 obligatoire, AMI résolue dynamiquement auprès de Canonical.
 

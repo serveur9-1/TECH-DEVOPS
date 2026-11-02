@@ -1,15 +1,55 @@
-# Une seule VM dans le VPC par défaut. Créer un VPC complet n'apporterait rien
-# ici : l'application tient sur une instance et n'a rien de privé à isoler.
+# VPC dédié : un compte AWS neuf n'a pas toujours de VPC par défaut.
+# Un subnet public + une Internet Gateway suffisent ; pas de NAT ni de LB.
 
-data "aws_vpc" "default" {
-  default = true
+data "aws_availability_zones" "available" {
+  state = "available"
 }
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+resource "aws_vpc" "app" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project_name}-vpc"
   }
+}
+
+resource "aws_internet_gateway" "app" {
+  vpc_id = aws_vpc.app.id
+
+  tags = {
+    Name = "${var.project_name}-igw"
+  }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.app.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-public"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.app.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.app.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-public"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
 }
 
 # Résolue dynamiquement : un identifiant d'AMI change à chaque région et à
@@ -37,7 +77,7 @@ resource "aws_key_pair" "admin" {
 resource "aws_security_group" "app" {
   name        = "${var.project_name}-app"
   description = "Trafic web public, administration SSH restreinte"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = aws_vpc.app.id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ssh" {
@@ -82,7 +122,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 resource "aws_instance" "app" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
-  subnet_id              = data.aws_subnets.default.ids[0]
+  subnet_id              = aws_subnet.public.id
   key_name               = aws_key_pair.admin.key_name
   vpc_security_group_ids = [aws_security_group.app.id]
 
@@ -108,8 +148,9 @@ resource "aws_instance" "app" {
 # IP fixe : elle survit à un arrêt/relance de l'instance, donc pas de DNS à
 # refaire pointer ni de certificat à redemander.
 resource "aws_eip" "app" {
-  instance = aws_instance.app.id
-  domain   = "vpc"
+  instance   = aws_instance.app.id
+  domain     = "vpc"
+  depends_on = [aws_internet_gateway.app]
 
   tags = {
     Name = "${var.project_name}-app"
