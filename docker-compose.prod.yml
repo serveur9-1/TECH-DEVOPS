@@ -64,12 +64,9 @@ services:
     container_name: task-manager-frontend
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       # GitHub Actions copie nginx/default.conf ici, sans reconstruire l'image.
       - /opt/task-manager/nginx:/etc/nginx/conf.d:ro
-      - certbot-conf:/etc/letsencrypt:ro
-      - certbot-www:/var/www/certbot:ro
     depends_on:
       backend:
         condition: service_healthy
@@ -89,7 +86,3 @@ volumes:
     # ce qui évite de recréer une base vide après un déploiement lancé depuis
     # un autre répertoire.
     name: task-manager_db-data
-  certbot-conf:
-    name: task-manager_certbot-conf
-  certbot-www:
-    name: task-manager_certbot-www

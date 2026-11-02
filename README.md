@@ -26,7 +26,7 @@ flowchart TB
   Subnet --> EC2[t3.micro eu-west-3]
   SG[Security Group]
   SG -->|"22 depuis ssh_allowed_cidrs + IP runner le temps du job"| EC2
-  SG -->|"80 et 443 ouverts"| EC2
+  SG -->|"80 ouvert"| EC2
   EC2 --> Nginx[nginx :80]
   Nginx -->|"/api/"| API[FastAPI :8000]
   API --> PG[PostgreSQL :5432]
@@ -146,7 +146,8 @@ sudo docker compose -f /opt/task-manager/docker-compose.prod.yml up -d --no-buil
   GitHub sur la VM.
 - **SSH** : fermé à Internet. Seule votre IP Terraform, plus l'IP du runner
   pendant le job.
-- **HTTPS** : non configuré (pas de domaine). HTTP sur le port 80.
+- **HTTPS / Let's Encrypt / Certbot** : non configurés dans cette démonstration.
+  L'application est servie en HTTP sur le port 80 uniquement.
 - Une instance, pas de sauvegarde Postgres, logs via `docker logs`.
 
 ## Nettoyage
