@@ -1,0 +1,222 @@
+/* Thème clair par défaut, variante sombre plus bas. Les couleurs passent par
+   des variables pour que le second thème ne soit qu'une redéfinition. */
+:root {
+  --surface: #ffffff;
+  --background: #eef1f6;
+  --text: #1f2933;
+  --text-muted: #6b7684;
+  --border: #e1e6ed;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-contrast: #ffffff;
+  --danger: #c0392b;
+  --success: #15803d;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.08);
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #161b22;
+    --background: #0d1117;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --border: #272e38;
+    --accent: #3b82f6;
+    --accent-hover: #60a5fa;
+    --accent-contrast: #0d1117;
+    --danger: #f87171;
+    --success: #4ade80;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--background);
+  font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.card {
+  width: 100%;
+  max-width: 520px;
+  padding: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+}
+
+.counter {
+  margin: 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+form {
+  display: flex;
+  gap: 8px;
+}
+
+input {
+  flex: 1;
+  /* Sans min-width, un flex item ne rétrécit pas sous sa taille intrinsèque. */
+  min-width: 0;
+  padding: 11px 13px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.15s ease;
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+input:hover {
+  border-color: var(--accent);
+}
+
+/* :focus-visible plutôt que :focus : pas d'anneau de mise au point après un
+   simple clic à la souris, mais il reste présent au clavier. */
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button {
+  padding: 11px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.message {
+  min-height: 1.2rem;
+  margin: 12px 0 0;
+  font-size: 0.875rem;
+  color: var(--danger);
+}
+
+.message.is-success {
+  color: var(--success);
+}
+
+.task-list {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+}
+
+.task-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border);
+  animation: appear 0.18s ease-out;
+}
+
+.task-list li:last-child {
+  border-bottom: none;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+/* Respecte le réglage système « réduire les animations ». */
+@media (prefers-reduced-motion: reduce) {
+  .task-list li {
+    animation: none;
+  }
+
+  * {
+    transition: none !important;
+  }
+}
+
+.task-title {
+  overflow-wrap: anywhere;
+}
+
+.delete {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.delete:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.empty {
+  display: block;
+  padding: 24px 0;
+  border-bottom: none;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 420px) {
+  .card {
+    padding: 20px;
+  }
+
+  form {
+    flex-direction: column;
+  }
+}
