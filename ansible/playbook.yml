@@ -197,14 +197,26 @@
         validate: visudo -cf %s
 
     - name: Chercher un certificat existant
-      ansible.builtin.stat:
-        path: "/var/lib/docker/volumes/{{ certbot_conf_volume }}/_data/live/{{ domain }}/fullchain.pem"
+      # Via le volume nommé, sans dépendre du chemin interne de Docker.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --volume
+          - "{{ certbot_conf_volume }}:/etc/letsencrypt:ro"
+          - alpine:3.20
+          - test
+          - -f
+          - "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
       register: certificate
+      failed_when: false
+      changed_when: false
       when: domain | length > 0
 
     - name: Mémoriser la présence d'un certificat
       ansible.builtin.set_fact:
-        has_certificate: "{{ domain | length > 0 and certificate.stat.exists | default(false) }}"
+        has_certificate: "{{ domain | length > 0 and certificate.rc | default(1) == 0 }}"
 
     - name: Déposer la configuration Nginx HTTP
       # C'est elle qui sert le challenge ACME permettant d'obtenir le tout
@@ -268,13 +280,22 @@
       when: has_certificate or (certbot is defined and certbot is changed)
       notify: Recharger Nginx
 
-    - name: Démarrer le renouvellement automatique
-      ansible.builtin.command:
-        cmd: docker compose -f docker-compose.prod.yml up -d --no-build
-        chdir: "{{ app_dir }}"
-      when: domain | length > 0
-      register: compose_tls
-      changed_when: "'Started' in compose_tls.stderr or 'Created' in compose_tls.stderr"
+    - name: Planifier le renouvellement Let's Encrypt
+      # certbot renew sort 0 même si aucun certificat n'était dû : Nginx est
+      # donc rechargé après chaque exécution réussie, pas seulement après un
+      # vrai renouvellement. Le reload est gracieux (SIGHUP).
+      ansible.builtin.cron:
+        name: task-manager-certbot-renew
+        minute: "17"
+        hour: "3,15"
+        job: >-
+          /usr/bin/docker run --rm
+          --volume {{ certbot_conf_volume }}:/etc/letsencrypt
+          --volume {{ certbot_www_volume }}:/var/www/certbot
+          certbot/certbot:latest renew --webroot
+          --webroot-path=/var/www/certbot --quiet
+          && /usr/bin/docker exec task-manager-frontend nginx -s reload
+        state: "{{ 'present' if domain | length > 0 else 'absent' }}"
 
   handlers:
     - name: Recharger Nginx

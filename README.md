@@ -191,8 +191,8 @@ ansible-playbook playbook.yml \
 
 Le certificat est demandé en mode webroot, pas standalone : Nginx garde le
 port 80 et le service n'est pas coupé pendant la validation. Le playbook
-bascule ensuite la configuration, ajoute HSTS et démarre un conteneur certbot
-qui tente un renouvellement deux fois par jour.
+bascule ensuite la configuration, ajoute HSTS, et pose une tâche cron qui
+renouvelle le certificat deux fois par jour puis recharge Nginx.
 
 ### Brancher le déploiement continu
 
