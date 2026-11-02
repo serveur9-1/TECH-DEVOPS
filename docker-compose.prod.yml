@@ -1,5 +1,5 @@
 # Fichier de production AUTONOME (il ne surcharge pas docker-compose.yml).
-# Copié sur l'EC2 par GitHub Actions dans /opt/task-manager/.
+# Copié sur l'EC2 par le runner self-hosted dans /opt/task-manager/.
 # Pas de section build: : les images viennent de Docker Hub.
 #
 #   IMAGE_TAG=<sha> docker compose -f docker-compose.prod.yml up -d
@@ -65,7 +65,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      # GitHub Actions copie nginx/default.conf ici, sans reconstruire l'image.
+      # Le job deploy copie nginx/default.conf ici, sans reconstruire l'image.
       - /opt/task-manager/nginx:/etc/nginx/conf.d:ro
     depends_on:
       backend:

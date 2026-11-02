@@ -1,2 +1,8 @@
-# Fichier conservé pour actionlint. Plus de runner self-hosted.
-{}
+# Labels du runner self-hosted EC2 (job deploy uniquement).
+self-hosted-runner:
+  labels:
+    - linux
+    - Linux
+    - x64
+    - X64
+    - ec2-deploy
