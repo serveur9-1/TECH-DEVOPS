@@ -1,0 +1,23 @@
+# Configuration de Ruff (analyse statique et formatage). Les règles sont
+# listées explicitement : les valeurs par défaut de l'outil changent d'une
+# version à l'autre, et la CI doit rendre le même verdict que le poste local.
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+  "E",   # erreurs de style pycodestyle
+  "W",   # avertissements pycodestyle
+  "F",   # erreurs probables (pyflakes)
+  "I",   # ordre des imports
+  "UP",  # tournures obsolètes pour la version de Python ciblée
+  "B",   # pièges courants (flake8-bugbear)
+  "SIM", # simplifications évidentes
+  "RET", # cohérence des return
+]
+
+[tool.ruff.lint.isort]
+# Sans cela, Ruff prend « main » pour une bibliothèque tierce et le remonte
+# dans le mauvais bloc d'imports.
+known-first-party = ["main", "conftest"]

@@ -1,0 +1,55 @@
+# Variables d'environnement et secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+
+# Outils de test et de qualité
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Terraform
+# L'état contient l'adresse IP, les identifiants de ressources et, selon les
+# providers, des valeurs sensibles en clair : il ne doit jamais être versionné.
+# Le fichier .terraform.lock.hcl, lui, est suivi volontairement.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+
+# Ansible
+# L'inventaire désigne un serveur réel ; le reste est généré ou sensible.
+ansible/inventory.ini
+*.retry
+vault-password
+.vault_pass
+
+# Clés et certificats
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+letsencrypt/
+certbot/
+
+# Éditeurs / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

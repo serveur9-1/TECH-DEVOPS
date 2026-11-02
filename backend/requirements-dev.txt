@@ -1,0 +1,6 @@
+# Tests et qualité de code. Jamais installé dans l'image de production.
+-r requirements.txt
+
+pytest==9.1.1
+httpx==0.28.1
+ruff==0.17.3

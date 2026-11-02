@@ -1,0 +1,9 @@
+# Dépendances d'exécution uniquement : ce sont les seules installées dans
+# l'image, pour ne pas y embarquer d'outillage de test que Trivy devrait
+# ensuite analyser. Les outils de développement sont dans requirements-dev.txt.
+fastapi==0.159.1
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+# [binary] : roue précompilée, pas de libpq ni de compilateur à installer.
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
