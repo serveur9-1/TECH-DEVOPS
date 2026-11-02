@@ -1,6 +1,5 @@
-# Une seule VM dans le VPC par défaut de la région. Créer un VPC complet
-# n'apporterait rien ici : l'application tient sur une instance et n'a aucune
-# ressource privée à isoler.
+# Une seule VM dans le VPC par défaut. Créer un VPC complet n'apporterait rien
+# ici : l'application tient sur une instance et n'a rien de privé à isoler.
 
 data "aws_vpc" "default" {
   default = true
@@ -13,8 +12,8 @@ data "aws_subnets" "default" {
   }
 }
 
-# AMI résolue dynamiquement plutôt que codée en dur : un identifiant d'AMI
-# change à chaque région et à chaque publication Canonical.
+# Résolue dynamiquement : un identifiant d'AMI change à chaque région et à
+# chaque publication Canonical.
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"] # Canonical
@@ -42,8 +41,7 @@ resource "aws_security_group" "app" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ssh" {
-  # Une règle par plage : AWS n'accepte qu'un seul CIDR par règle depuis la
-  # bascule vers les ressources dédiées.
+  # Une règle par plage : AWS n'accepte qu'un seul CIDR par règle.
   for_each = toset(var.ssh_allowed_cidrs)
 
   security_group_id = aws_security_group.app.id
@@ -75,8 +73,7 @@ resource "aws_vpc_security_group_ingress_rule" "https" {
 
 resource "aws_vpc_security_group_egress_rule" "all" {
   security_group_id = aws_security_group.app.id
-  # Sortie libre : le serveur tire les images Docker, les paquets APT et
-  # contacte GitHub pour le runner auto-hébergé.
+  # Le serveur tire les images Docker, les paquets APT et contacte GitHub.
   description = "Sortie libre"
   cidr_ipv4   = "0.0.0.0/0"
   ip_protocol = "-1"
@@ -92,14 +89,14 @@ resource "aws_instance" "app" {
   root_block_device {
     volume_size = var.root_volume_size
     volume_type = "gp3"
-    # Les données PostgreSQL vivent sur ce disque : il doit être chiffré.
+    # Les données PostgreSQL vivent sur ce disque.
     encrypted = true
   }
 
   metadata_options {
     http_endpoint = "enabled"
-    # IMDSv2 obligatoire : sans jeton, une SSRF depuis l'application suffirait
-    # à lire les identifiants du rôle d'instance.
+    # IMDSv2 obligatoire : une SSRF depuis l'application ne suffit plus à lire
+    # les identifiants du rôle d'instance.
     http_tokens = "required"
   }
 
@@ -108,8 +105,8 @@ resource "aws_instance" "app" {
   }
 }
 
-# IP fixe : elle survit à un arrêt/relance de l'instance, ce qui évite de
-# refaire pointer le DNS et de perdre le certificat Let's Encrypt.
+# IP fixe : elle survit à un arrêt/relance de l'instance, donc pas de DNS à
+# refaire pointer ni de certificat à redemander.
 resource "aws_eip" "app" {
   instance = aws_instance.app.id
   domain   = "vpc"

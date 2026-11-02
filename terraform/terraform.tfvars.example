@@ -1,12 +1,11 @@
-# Copier en terraform.tfvars et adapter. Le fichier réel n'est pas versionné :
-# il contient l'adresse IP d'administration.
+# Copier en terraform.tfvars et adapter. Le fichier réel n'est pas versionné.
 #
 #   cp terraform.tfvars.example terraform.tfvars
 
 project_name = "task-manager"
 aws_region   = "eu-west-3"
 
-# Votre adresse IP publique en /32. Obtenue avec : curl -s https://ifconfig.me
+# Votre IP publique en /32 : curl -s https://ifconfig.me
 ssh_allowed_cidrs = ["203.0.113.10/32"]
 
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"

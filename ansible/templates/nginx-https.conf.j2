@@ -1,6 +1,5 @@
 {{ ansible_managed | comment }}
-# Variante HTTPS, déployée uniquement quand un nom de domaine est fourni.
-# Elle remplace nginx/default.conf dans /opt/task-manager/nginx/.
+# Variante HTTPS, déployée seulement quand un nom de domaine est fourni.
 
 server_tokens off;
 
@@ -13,16 +12,15 @@ server {
     listen 80;
     server_name {{ domain }};
 
-    # Sonde de déploiement : elle doit répondre 200 en clair, sinon le script
-    # de déploiement ne verrait qu'une redirection 301.
+    # Doit répondre 200 en clair, sinon le script de déploiement ne verrait
+    # qu'une redirection 301.
     location = /healthz {
         access_log off;
         add_header Content-Type text/plain;
         return 200 "ok\n";
     }
 
-    # Renouvellement Let's Encrypt : jamais redirigé, le validateur ACME ne
-    # suit pas les redirections vers HTTPS pour le challenge http-01.
+    # Jamais redirigé : le validateur ACME ne suit pas les redirections.
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/certbot;
         default_type "text/plain";
@@ -46,8 +44,6 @@ server {
     ssl_certificate     /etc/letsencrypt/live/{{ domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
 
-    # TLS 1.2 au minimum : les versions antérieures sont dépréciées et
-    # refusées par les navigateurs à jour.
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
     ssl_session_cache shared:SSL:10m;
@@ -59,8 +55,7 @@ server {
 
     client_max_body_size 64k;
 
-    # HSTS : n'a de sens qu'ici, une fois le certificat en place. Sans
-    # includeSubDomains ni preload, qui engagent bien au-delà de ce service.
+    # Sans includeSubDomains ni preload, qui engagent au-delà de ce service.
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;

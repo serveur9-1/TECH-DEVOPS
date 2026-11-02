@@ -7,7 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Permissions minimales. Chaque job qui a besoin de plus les demande lui-même.
 permissions:
   contents: read
 
@@ -17,8 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Dépôt d'images, défini en variable de dépôt pour ne pas figer un compte
-  # dans le code. Exemple : « moncompte » sur Docker Hub.
+  # Compte du registre, en variable de dépôt pour ne pas le figer dans le code.
   REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE }}
 
 jobs:
@@ -74,8 +72,7 @@ jobs:
   test:
     name: Tests backend
     runs-on: ubuntu-24.04
-    # Vrai PostgreSQL, et non un substitut : les tests valident le SQL
-    # réellement envoyé en production.
+    # Vrai PostgreSQL : les tests valident le SQL réellement envoyé en prod.
     services:
       postgres:
         image: postgres:17-alpine
@@ -118,8 +115,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Trois analyses en une : dépendances vulnérables, secrets en clair et
-      # mauvaises configurations dans les Dockerfile, Compose et Terraform.
+      # Dépendances vulnérables, secrets en clair et mauvaises configurations
+      # dans les Dockerfile, les fichiers Compose et le code Terraform.
       - name: Trivy — système de fichiers
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -128,14 +125,11 @@ jobs:
           scanners: vuln,secret,misconfig
           format: sarif
           output: trivy-fs.sarif
-          # Ce passage produit le rapport ; c'est l'étape suivante qui décide
-          # d'échouer ou non.
           exit-code: "0"
 
       - name: Publier le rapport dans l'onglet Security
         uses: github/codeql-action/upload-sarif@v3
-        # Le code scanning n'est pas disponible sur tous les plans : son
-        # absence ne doit pas faire échouer la pipeline.
+        # Le code scanning n'est pas disponible sur tous les plans.
         continue-on-error: true
         with:
           sarif_file: trivy-fs.sarif
@@ -178,8 +172,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          # Chargée dans le démon local : Trivy doit pouvoir l'inspecter avant
-          # qu'elle ne soit publiée.
+          # Chargée dans le démon : Trivy doit l'inspecter avant publication.
           load: true
           push: false
           tags: task-manager-${{ matrix.name }}:ci
@@ -196,8 +189,7 @@ jobs:
           format: table
           exit-code: "1"
 
-      # Sur une Pull Request on s'arrête ici : pas de connexion au registre,
-      # donc aucun secret manipulé.
+      # Sur une Pull Request on s'arrête ici : aucun secret n'est manipulé.
       - name: Connexion à Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -215,33 +207,27 @@ jobs:
           tags: |
             ${{ env.REGISTRY_NAMESPACE }}/task-manager-${{ matrix.name }}:latest
             ${{ env.REGISTRY_NAMESPACE }}/task-manager-${{ matrix.name }}:${{ github.sha }}
-          # Le cache de l'étape précédente est réutilisé : rien n'est
-          # reconstruit, l'image publiée est exactement celle qu'a vue Trivy.
+          # Cache réutilisé : l'image publiée est celle qu'a vue Trivy.
           cache-from: type=gha,scope=${{ matrix.name }}
 
   deploy:
     name: Déploiement
     needs: build
-    # Runner auto-hébergé sur la VM : plus besoin d'ouvrir le port 22 aux
-    # plages d'IP des runners GitHub, c'est le runner qui sort vers GitHub.
+    # Runner auto-hébergé sur la VM : aucun port entrant à ouvrir pour la CI,
+    # c'est le runner qui sort vers GitHub.
     runs-on: [self-hosted, Linux, X64, app-deploy]
-    # Désactivé par défaut. Ce job ne s'exécute que si la variable de dépôt
-    # DEPLOY_ENABLED vaut "true". Tant qu'elle est absente, le job est ignoré
-    # sans faire échouer la pipeline.
+    # Désactivé tant que la variable de dépôt DEPLOY_ENABLED ne vaut pas
+    # "true" : le job est ignoré sans faire échouer la pipeline.
     if: >-
       github.ref == 'refs/heads/main' &&
       github.event_name != 'pull_request' &&
       vars.DEPLOY_ENABLED == 'true'
     environment: production
-    # Pas de checkout : le déploiement n'utilise aucun fichier du dépôt. Le
-    # fichier Compose de production vit dans /opt/task-manager, en root:root,
-    # hors de portée de gha-runner.
+    # Pas de checkout : rien de ce qui tourne en root ne vient d'une branche.
     steps:
       - name: Déployer le tag ${{ github.sha }}
         env:
           IMAGE_TAG: ${{ github.sha }}
-        # Seule commande privilégiée autorisée par /etc/sudoers.d.
-        # -n : échoue au lieu d'attendre un mot de passe.
-        # Le tag passe par l'environnement plutôt que par une interpolation
-        # ${{ }} dans le script, et le script revalide sa valeur.
+        # Seule commande privilégiée autorisée par /etc/sudoers.d. Le tag passe
+        # par l'environnement, et le script revalide sa valeur.
         run: sudo -n /usr/local/sbin/task-manager-deploy "$IMAGE_TAG"

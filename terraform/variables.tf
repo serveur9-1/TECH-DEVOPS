@@ -11,7 +11,7 @@ variable "aws_region" {
 }
 
 variable "instance_type" {
-  description = "Gabarit de l'instance EC2."
+  description = "Gabarit de l'instance."
   type        = string
   default     = "t3.micro"
 }
@@ -27,8 +27,6 @@ variable "ssh_allowed_cidrs" {
   type        = list(string)
 
   validation {
-    # Le port 22 ouvert au monde entier est la première chose que scannent les
-    # robots. Ansible et l'administration passent par une adresse connue.
     condition     = !contains(var.ssh_allowed_cidrs, "0.0.0.0/0")
     error_message = "Le port SSH ne doit pas être ouvert à 0.0.0.0/0 : indiquez votre adresse IP en /32."
   }

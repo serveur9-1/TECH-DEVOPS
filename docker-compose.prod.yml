@@ -1,7 +1,7 @@
 # Fichier de production AUTONOME (il ne surcharge pas docker-compose.yml).
-# Il est installé par Ansible dans /opt/task-manager/ en root:root et exécuté
-# par root : tout chemin qu'il référence est une élévation de privilèges
-# potentielle. Il n'a donc ni section build:, ni chemin relatif, et ses seuls
+# Installé par Ansible dans /opt/task-manager/ en root:root et exécuté par
+# root : tout chemin qu'il référence est une élévation de privilèges
+# potentielle. Pas de section build:, pas de chemin relatif, et ses seuls
 # montages hôte pointent vers des répertoires root:root que le script de
 # déploiement revalide à chaque exécution.
 #
@@ -69,8 +69,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # Ansible écrit ici la variante HTTP ou HTTPS de la configuration, sans
-      # qu'il faille reconstruire l'image pour activer TLS.
+      # Ansible écrit ici la variante HTTP ou HTTPS, sans reconstruire l'image.
       - /opt/task-manager/nginx:/etc/nginx/conf.d:ro
       - certbot-conf:/etc/letsencrypt:ro
       - certbot-www:/var/www/certbot:ro
@@ -80,8 +79,8 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    # Rechargement périodique : après un renouvellement Let's Encrypt, Nginx
-    # continue de servir l'ancien certificat jusqu'à ce qu'on le lui dise.
+    # Après un renouvellement, Nginx continue de servir l'ancien certificat
+    # jusqu'à ce qu'on le lui dise.
     command: >-
       /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec nginx -g 'daemon off;'"
     healthcheck:
@@ -94,24 +93,21 @@ services:
   certbot:
     image: certbot/certbot:latest
     container_name: task-manager-certbot
-    # Démarré uniquement quand COMPOSE_PROFILES=tls, donc seulement si un nom
-    # de domaine a été fourni à Ansible.
+    # Démarré seulement si COMPOSE_PROFILES=tls, donc si un domaine est défini.
     profiles:
       - tls
     volumes:
       - certbot-conf:/etc/letsencrypt
       - certbot-www:/var/www/certbot
     restart: unless-stopped
-    # Let's Encrypt ne renouvelle qu'à trente jours de l'expiration : une
-    # tentative deux fois par jour est sans effet le reste du temps.
     entrypoint: >-
       /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot --webroot-path /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
 
 volumes:
   db-data:
-    # Nom explicite : il reste identique quel que soit le nom de projet
-    # Compose, ce qui évite de recréer une base vide après un déploiement
-    # lancé depuis un autre répertoire.
+    # Nom explicite : il reste le même quel que soit le nom de projet Compose,
+    # ce qui évite de recréer une base vide après un déploiement lancé depuis
+    # un autre répertoire.
     name: task-manager_db-data
   certbot-conf:
     name: task-manager_certbot-conf

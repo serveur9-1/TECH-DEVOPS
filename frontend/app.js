@@ -15,8 +15,7 @@ function showMessage(text, isSuccess = false) {
   message.textContent = text;
   message.classList.toggle("is-success", isSuccess && text !== "");
 
-  // Une confirmation n'a pas à rester à l'écran, contrairement à une erreur
-  // que l'utilisateur doit pouvoir relire.
+  // Une erreur reste affichée, une confirmation s'efface.
   if (isSuccess && text !== "") {
     messageTimer = window.setTimeout(() => showMessage(""), 2500);
   }

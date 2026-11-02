@@ -14,14 +14,9 @@ DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/tasks"
 
 TITLE_MAX_LENGTH = 200
 
-# Le conteneur backend peut démarrer avant que PostgreSQL n'accepte les
-# connexions. Compose attend déjà son healthcheck, mais une base distante ou un
-# redémarrage du serveur ne passent pas par là.
+# Compose attend le healthcheck de la base, mais pas un PostgreSQL distant.
 STARTUP_ATTEMPTS = 30
 STARTUP_DELAY_SECONDS = 1
-
-# Délai court sur /ready : un readiness probe doit répondre vite, quitte à
-# déclarer le service indisponible.
 READY_TIMEOUT_SECONDS = 2
 
 SCHEMA = f"""
@@ -60,17 +55,14 @@ def create_pool():
         conninfo=database_url(),
         min_size=1,
         max_size=10,
-        # dict_row : les lignes arrivent en dictionnaires, comme sqlite3.Row.
-        # autocommit : toutes les requêtes de cette API tiennent en un seul
-        # ordre SQL, inutile d'ouvrir une transaction et de garder une
-        # connexion « idle in transaction » le temps du rendu de la réponse.
+        # Autocommit : toutes les requêtes tiennent en un ordre SQL, inutile de
+        # garder une connexion « idle in transaction » pendant la réponse.
         kwargs={"autocommit": True, "row_factory": dict_row},
         open=False,
     )
 
 
 def wait_for_database(pool):
-    """Boucle jusqu'à ce que PostgreSQL réponde, ou abandonne le démarrage."""
     last_error = None
     for _ in range(STARTUP_ATTEMPTS):
         try:
@@ -141,8 +133,6 @@ def create_task(task: TaskIn):
         raise HTTPException(status_code=422, detail="title must not be empty")
 
     with get_pool().connection() as connection:
-        # RETURNING plutôt qu'un lastrowid : PostgreSQL rend l'identifiant
-        # attribué dans la même requête, sans aller-retour supplémentaire.
         return connection.execute(
             "INSERT INTO tasks (title) VALUES (%s) RETURNING id, title", (title,)
         ).fetchone()

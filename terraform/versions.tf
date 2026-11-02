@@ -9,10 +9,8 @@ terraform {
     }
   }
 
-  # L'état est local par défaut, ce qui suffit pour un environnement unique
-  # piloté par une seule personne. À plusieurs, il faudrait le déporter sur un
-  # bucket S3 avec verrouillage DynamoDB : l'état contient l'IP, les
-  # identifiants de ressources et doit être partagé sans être versionné.
+  # État local : suffisant pour un environnement unique. À plusieurs, le
+  # déporter sur S3 avec verrouillage DynamoDB.
 }
 
 provider "aws" {
