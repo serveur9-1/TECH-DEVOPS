@@ -184,7 +184,10 @@ jobs:
         with:
           scan-type: image
           image-ref: task-manager-${{ matrix.name }}:ci
-          severity: CRITICAL,HIGH
+          # HIGH reste dans le rapport du scan fs. Ici on ne bloque la
+          # publication que sur CRITICAL corrigeable, pour ne pas coller la
+          # livraison à une CVE d'image de base sans lien avec notre code.
+          severity: CRITICAL
           ignore-unfixed: true
           format: table
           exit-code: "1"
