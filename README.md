@@ -8,13 +8,13 @@ Actions. Exécution par Docker Compose sur EC2.
 
 ```mermaid
 flowchart LR
-  Push[git push main] --> GHA[GitHub Actions ubuntu-latest]
+  Push[git push main] --> GHA[ubuntu-latest]
   GHA --> Tests[lint pytest Trivy]
   Tests --> Hub[Docker Hub serveur91225]
-  Hub --> SSH[déploiement SSH]
-  SSH --> EC2[EC2 Ubuntu 24.04]
+  Hub --> Runner[runner self-hosted EC2]
+  Runner --> Compose[docker compose pull/up]
   User[Navigateur :80] --> EIP[Elastic IP]
-  EIP --> EC2
+  EIP --> EC2[EC2 Ubuntu 24.04]
 ```
 
 ```mermaid
@@ -32,9 +32,11 @@ flowchart TB
   API --> PG[PostgreSQL :5432]
 ```
 
-Terraform crée le réseau et la VM. GitHub Actions teste, scanne, publie les
-images, puis déploie par SSH et Docker Compose. Ansible n'est pas utilisé.
-Le mot de passe PostgreSQL est généré sur l'EC2, pas dans GitHub.
+Terraform crée le réseau et la VM. Les tests, Trivy et le build tournent sur
+`ubuntu-latest`. Le job de déploiement tourne sur un runner self-hosted installé
+sur l'EC2 : Docker Compose tire les images et redémarre les services, sans SSH
+depuis GitHub et sans credentials AWS. Ansible n'est pas utilisé.
+Le mot de passe PostgreSQL reste dans `/opt/task-manager/.env` (mode 0600).
 
 ### Structure
 
@@ -88,9 +90,10 @@ manuellement).
 | Tests backend | `ubuntu-24.04` | pytest + PostgreSQL |
 | Analyse de sécurité | `ubuntu-24.04` | Trivy fs, bloque sur CRITICAL corrigeable |
 | Images | `ubuntu-24.04` | build, Trivy image CRITICAL, push `main` |
-| Déploiement | `ubuntu-latest` | SSH + Compose, sur `main` seulement |
+| Déploiement | self-hosted `ec2-deploy` | Compose pull/up sur l'EC2, `main` seulement |
 
-Sur une Pull Request : tests et build, **aucune** publication, **aucun** SSH.
+Sur une Pull Request : tests et build, **aucune** publication, **aucun**
+déploiement (le runner EC2 n'exécute pas les PR).
 
 Sur `main` : publication
 
@@ -99,31 +102,55 @@ serveur91225/task-manager-backend:latest|<sha>
 serveur91225/task-manager-frontend:latest|<sha>
 ```
 
-puis déploiement SSH :
+puis le runner self-hosted, déjà sur la VM :
 
-1. Copier `docker-compose.prod.yml`, `nginx/default.conf`, `scripts/ec2-deploy.sh`.
-2. Créer `/opt/task-manager/.env` au premier run (mot de passe généré sur l'EC2, mode 0600).
-3. `docker compose pull && up -d` avec `IMAGE_TAG=$GITHUB_SHA`.
-4. `curl` HTTP `/healthz` et `/api/health`.
+1. Copier `docker-compose.prod.yml` et `nginx/default.conf` vers `/opt/task-manager`.
+2. Réutiliser `/opt/task-manager/.env` existant (jamais recréé, jamais affiché).
+3. `docker compose pull && up -d --no-build` avec `IMAGE_TAG=$GITHUB_SHA`.
+4. Healthchecks locaux `/healthz`, `/api/health`, `/api/ready`.
+
+Aucun build Docker ni pytest sur l'EC2 (1 Gio RAM).
 
 ### Secrets (noms seulement)
 
-| Type | Nom |
-|---|---|
-| Secret | `DOCKERHUB_USERNAME` (`serveur91225`, sert aussi de namespace d'images) |
-| Secret | `DOCKERHUB_TOKEN` |
-| Secret | `EC2_HOST` (`15.237.21.24`) |
-| Secret | `EC2_USER` (`ubuntu`) |
-| Secret | `EC2_SSH_KEY` |
+| Type | Nom | Usage |
+|---|---|---|
+| Secret | `DOCKERHUB_USERNAME` | namespace d'images + login pull |
+| Secret | `DOCKERHUB_TOKEN` | login Docker Hub optionnel si l'image est privée |
 
-Pas de secrets AWS ni PostgreSQL. `ubuntu` utilise `sudo docker` (AMI Ubuntu).
+Plus de secrets AWS, SSH ou PostgreSQL pour le déploiement.
 
-### SSH depuis GitHub Actions
+### Runner self-hosted
 
-Le Security Group n'autorise le port 22 que depuis `ssh_allowed_cidrs` (ton IP).
-Les runners `ubuntu-latest` ont une IP Azure dynamique : **ils ne joignent pas
-le SSH tant que le Security Group reste ainsi**. On n'ouvre pas `0.0.0.0/0`.
-Le premier test se fait depuis ton PC, déjà autorisé.
+Label `ec2-deploy`. Service systemd, utilisateur `ubuntu`, `sudo docker`
+sans groupe `docker`. Enregistré **uniquement** sur ce dépôt, jamais sur une
+organisation entière. SSH reste fermé à Internet (`ssh_allowed_cidrs` seulement).
+
+Installation (sur l'EC2, depuis un SSH déjà autorisé) : GitHub → Settings →
+Actions → Runners → New self-hosted runner, récupérer le jeton, puis :
+
+```bash
+sudo mkdir -p /home/ubuntu/actions-runner
+sudo chown ubuntu:ubuntu /home/ubuntu/actions-runner
+cd /home/ubuntu/actions-runner
+curl -s https://api.github.com/repos/actions/runner/releases/latest \
+  | grep -oP '"tag_name": "v\K[0-9.]+' | head -1 | tee /tmp/runner.ver
+VER=$(cat /tmp/runner.ver)
+curl -L -o actions-runner.tgz \
+  "https://github.com/actions/runner/releases/download/v${VER}/actions-runner-linux-x64-${VER}.tar.gz"
+tar xzf actions-runner.tgz
+./config.sh --unattended \
+  --url https://github.com/serveur9-1/TECH-DEVOPS \
+  --token <JETON> \
+  --name task-manager-ec2 \
+  --labels ec2-deploy \
+  --work _work
+sudo ./svc.sh install ubuntu
+sudo ./svc.sh start
+```
+
+Ne pas ajouter `ubuntu` au groupe `docker`. Le job deploy est le seul à
+utiliser ce runner.
 
 ## Rollback
 
@@ -139,11 +166,12 @@ sudo docker compose -f /opt/task-manager/docker-compose.prod.yml up -d --no-buil
 
 ## Limitations
 
-- **t3.micro (1 Gio RAM)** : la pile tient grâce à 2 Gio de swap. Pas de runner
-  GitHub sur la VM.
-- **SSH** : fermé à Internet par Terraform (ton IP uniquement). GitHub Actions
-  n'atteint pas le port 22 tant que le Security Group reste inchangé. On n'ouvre
-  pas `0.0.0.0/0`.
+- **t3.micro (1 Gio RAM)** : la pile tient grâce à 2 Gio de swap. Le runner
+  self-hosted ne fait que `compose pull/up`, jamais de build ni de tests.
+- **SSH** : fermé à Internet (ton IP uniquement). On n'ouvre pas `0.0.0.0/0`.
+  Le déploiement n'utilise plus SSH depuis GitHub.
+- **Runner self-hosted** : un workflow malveillant sur `main` aurait un accès
+  local à la VM. D'où le filtre « `main` uniquement, pas de Pull Request ».
 - **HTTPS / Let's Encrypt / Certbot** : non configurés dans cette démonstration.
   L'application est servie en HTTP sur le port 80 uniquement.
 - Une instance, pas de sauvegarde Postgres, logs via `docker logs`.
