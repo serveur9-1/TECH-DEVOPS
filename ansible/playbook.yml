@@ -16,8 +16,8 @@
     postgres_db: tasks
     postgres_user: tasks
 
-    backend_image: votre-compte/task-manager-backend
-    frontend_image: votre-compte/task-manager-frontend
+    backend_image: serveur91225/task-manager-backend
+    frontend_image: serveur91225/task-manager-frontend
     # Valeur d'amorçage : chaque déploiement exporte le SHA du commit.
     image_tag: latest
 
