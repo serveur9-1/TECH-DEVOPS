@@ -1,0 +1,34 @@
+# Contexte de build du service frontend (racine du projet).
+.git
+.gitignore
+.gitattributes
+.github
+
+# L'image Nginx n'a besoin de rien de tout cela.
+backend
+terraform
+ansible
+deploy
+load-tests
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets et états d'infrastructure
+.env
+.env.*
+*.tfstate
+*.tfstate.*
+*.pem
+*.key
+
+# Divers
+*.md
+Dockerfile
+docker-compose.yml
+docker-compose.prod.yml

@@ -1,0 +1,119 @@
+# Fichier de production AUTONOME (il ne surcharge pas docker-compose.yml).
+# Il est installé par Ansible dans /opt/task-manager/ en root:root et exécuté
+# par root : tout chemin qu'il référence est une élévation de privilèges
+# potentielle. Il n'a donc ni section build:, ni chemin relatif, et ses seuls
+# montages hôte pointent vers des répertoires root:root que le script de
+# déploiement revalide à chaque exécution.
+#
+#   IMAGE_TAG=<sha> docker compose -f docker-compose.prod.yml up -d
+#
+# Les variables viennent de /opt/task-manager/.env (root:root, mode 0600).
+name: task-manager
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: task-manager-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB est obligatoire}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER est obligatoire}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD est obligatoire}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    # IMAGE_TAG est obligatoire : pas de retour silencieux sur « latest », on
+    # déploie exactement l'image construite par la pipeline.
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE est obligatoire}:${IMAGE_TAG:?IMAGE_TAG est obligatoire}
+    container_name: task-manager-backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE est obligatoire}:${IMAGE_TAG:?IMAGE_TAG est obligatoire}
+    container_name: task-manager-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Ansible écrit ici la variante HTTP ou HTTPS de la configuration, sans
+      # qu'il faille reconstruire l'image pour activer TLS.
+      - /opt/task-manager/nginx:/etc/nginx/conf.d:ro
+      - certbot-conf:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # Rechargement périodique : après un renouvellement Let's Encrypt, Nginx
+    # continue de servir l'ancien certificat jusqu'à ce qu'on le lui dise.
+    command: >-
+      /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec nginx -g 'daemon off;'"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: task-manager-certbot
+    # Démarré uniquement quand COMPOSE_PROFILES=tls, donc seulement si un nom
+    # de domaine a été fourni à Ansible.
+    profiles:
+      - tls
+    volumes:
+      - certbot-conf:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    restart: unless-stopped
+    # Let's Encrypt ne renouvelle qu'à trente jours de l'expiration : une
+    # tentative deux fois par jour est sans effet le reste du temps.
+    entrypoint: >-
+      /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot --webroot-path /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+
+volumes:
+  db-data:
+    # Nom explicite : il reste identique quel que soit le nom de projet
+    # Compose, ce qui évite de recréer une base vide après un déploiement
+    # lancé depuis un autre répertoire.
+    name: task-manager_db-data
+  certbot-conf:
+    name: task-manager_certbot-conf
+  certbot-www:
+    name: task-manager_certbot-www

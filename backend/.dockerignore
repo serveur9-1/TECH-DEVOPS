@@ -1,0 +1,18 @@
+# Contexte de build du service backend (./backend).
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+.env.*
+
+# Inutile à l'exécution de l'API
+conftest.py
+test_main.py
+requirements-dev.txt
+Dockerfile
+.dockerignore
