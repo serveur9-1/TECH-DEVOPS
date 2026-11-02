@@ -1,0 +1,300 @@
+---
+# Configure une VM Ubuntu 24.04 vierge, créée par Terraform, jusqu'à
+# l'application en ligne. Le playbook est idempotent : le rejouer ne
+# réinstalle rien et ne régénère pas le mot de passe de la base.
+#
+#   ansible-playbook playbook.yml
+#   ansible-playbook playbook.yml -e domain=exemple.fr -e letsencrypt_email=moi@exemple.fr
+#
+# Seuls les modules d'ansible-core sont utilisés : aucune collection à
+# installer avant de jouer.
+- name: Configurer le serveur Task Manager
+  hosts: app
+  become: true
+
+  vars:
+    app_dir: /opt/task-manager
+    runner_user: gha-runner
+
+    postgres_db: tasks
+    postgres_user: tasks
+
+    # Images publiées par la pipeline. À adapter à votre registre.
+    backend_image: votre-compte/task-manager-backend
+    frontend_image: votre-compte/task-manager-frontend
+    # Valeur d'amorçage : chaque déploiement exporte le SHA du commit.
+    image_tag: latest
+
+    # Laisser vide pour rester en HTTP. Renseigner un domaine qui pointe déjà
+    # vers l'IP de la VM déclenche la demande de certificat Let's Encrypt.
+    domain: ""
+    letsencrypt_email: ""
+
+    certbot_conf_volume: task-manager_certbot-conf
+    certbot_www_volume: task-manager_certbot-www
+
+  pre_tasks:
+    - name: Refuser un domaine sans adresse de contact
+      ansible.builtin.assert:
+        that: domain | length == 0 or letsencrypt_email | length > 0
+        fail_msg: >-
+          letsencrypt_email est obligatoire avec domain : Let's Encrypt s'en
+          sert pour prévenir d'une expiration imminente.
+
+  tasks:
+    # --- Socle système -----------------------------------------------------
+    - name: Installer les prérequis système
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - ufw
+          - unattended-upgrades
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Créer le répertoire des clés APT
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Déposer la clé de signature du dépôt Docker
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Déclarer le dépôt Docker
+      # Le dépôt officiel, et non le paquet docker.io d'Ubuntu : lui seul
+      # fournit le greffon Compose v2 dans une version récente.
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu
+          {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Installer Docker et le greffon Compose
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Démarrer Docker et l'activer au démarrage
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Activer les mises à jour de sécurité automatiques
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+        owner: root
+        group: root
+        mode: "0644"
+
+    # --- Pare-feu ----------------------------------------------------------
+    # Deuxième barrière seulement : Docker écrit ses propres règles iptables et
+    # contourne ufw pour les ports qu'il publie. La vraie frontière reste le
+    # groupe de sécurité AWS. Ufw protège en revanche les services de l'hôte,
+    # SSH en tête.
+    - name: Autoriser SSH, HTTP et HTTPS
+      ansible.builtin.command: "ufw allow {{ item }}"
+      loop:
+        - 22/tcp
+        - 80/tcp
+        - 443/tcp
+      register: ufw_allow
+      changed_when: "'Skipping' not in ufw_allow.stdout"
+
+    - name: Relever l'état du pare-feu
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+
+    - name: Activer le pare-feu
+      ansible.builtin.command: ufw --force enable
+      when: "'Status: active' not in ufw_status.stdout"
+      changed_when: true
+
+    # --- Compte de déploiement ---------------------------------------------
+    - name: Créer l'utilisateur du runner GitHub Actions
+      # Volontairement hors du groupe docker : en faire partie équivaut à un
+      # accès root sur la machine. Il n'obtient qu'une règle sudo ciblée.
+      ansible.builtin.user:
+        name: "{{ runner_user }}"
+        shell: /bin/bash
+        create_home: true
+
+    # --- Arborescence applicative ------------------------------------------
+    - name: Créer l'arborescence applicative
+      # root:root et non inscriptible par les autres : le script de
+      # déploiement refuse de s'exécuter si ce n'est pas le cas.
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ app_dir }}"
+        - "{{ app_dir }}/nginx"
+
+    - name: Générer le mot de passe PostgreSQL au premier passage
+      # « creates » rend la tâche idempotente : le mot de passe est tiré une
+      # seule fois, sinon chaque exécution couperait l'accès à la base.
+      ansible.builtin.shell:
+        cmd: "umask 077 && openssl rand -hex 24 > {{ app_dir }}/.pgpassword"
+        creates: "{{ app_dir }}/.pgpassword"
+
+    - name: Lire le mot de passe PostgreSQL
+      ansible.builtin.slurp:
+        src: "{{ app_dir }}/.pgpassword"
+      register: pgpassword_file
+      no_log: true
+
+    - name: Mémoriser le mot de passe pour les gabarits
+      ansible.builtin.set_fact:
+        postgres_password: "{{ (pgpassword_file.content | b64decode) | trim }}"
+      no_log: true
+
+    - name: Déposer le fichier d'environnement
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Déposer le fichier Compose de production
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../docker-compose.prod.yml"
+        dest: "{{ app_dir }}/docker-compose.prod.yml"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # --- Script de déploiement privilégié ----------------------------------
+    - name: Installer le script de déploiement
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../deploy/task-manager-deploy.sh"
+        dest: /usr/local/sbin/task-manager-deploy
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Autoriser gha-runner à lancer le déploiement
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../deploy/task-manager-deploy.sudoers"
+        dest: /etc/sudoers.d/task-manager-deploy
+        owner: root
+        group: root
+        mode: "0440"
+        # Un fichier sudoers invalide rend la machine inadministrable : il
+        # n'est installé que s'il passe le contrôle syntaxique.
+        validate: visudo -cf %s
+
+    # --- Configuration Nginx et démarrage ----------------------------------
+    - name: Chercher un certificat existant
+      ansible.builtin.stat:
+        path: "/var/lib/docker/volumes/{{ certbot_conf_volume }}/_data/live/{{ domain }}/fullchain.pem"
+      register: certificate
+      when: domain | length > 0
+
+    - name: Mémoriser la présence d'un certificat
+      ansible.builtin.set_fact:
+        has_certificate: "{{ domain | length > 0 and certificate.stat.exists | default(false) }}"
+
+    - name: Déposer la configuration Nginx HTTP
+      # Posée tant qu'aucun certificat n'existe : c'est elle qui sert le
+      # challenge ACME permettant d'obtenir le tout premier certificat.
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../nginx/default.conf"
+        dest: "{{ app_dir }}/nginx/default.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      when: not has_certificate
+
+    - name: Démarrer la pile applicative
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans
+        chdir: "{{ app_dir }}"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+
+    - name: Attendre que Nginx réponde
+      ansible.builtin.uri:
+        url: http://127.0.0.1/healthz
+        status_code: 200
+      register: nginx_ready
+      retries: 30
+      delay: 2
+      until: nginx_ready is succeeded
+
+    # --- HTTPS -------------------------------------------------------------
+    - name: Demander le certificat Let's Encrypt
+      # webroot et non standalone : Nginx garde le port 80, le service n'est
+      # pas interrompu pendant la validation.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --volume
+          - "{{ certbot_conf_volume }}:/etc/letsencrypt"
+          - --volume
+          - "{{ certbot_www_volume }}:/var/www/certbot"
+          - certbot/certbot:latest
+          - certonly
+          - --webroot
+          - --webroot-path=/var/www/certbot
+          - "--domain={{ domain }}"
+          - "--email={{ letsencrypt_email }}"
+          - --agree-tos
+          - --no-eff-email
+          - --non-interactive
+      when: domain | length > 0 and not has_certificate
+      register: certbot
+      changed_when: certbot.rc == 0
+
+    - name: Basculer Nginx en HTTPS
+      ansible.builtin.template:
+        src: nginx-https.conf.j2
+        dest: "{{ app_dir }}/nginx/default.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      when: has_certificate or (certbot is defined and certbot is changed)
+      notify: Recharger Nginx
+
+    - name: Démarrer le renouvellement automatique
+      # Le profil tls n'existe dans .env que si un domaine est configuré ;
+      # sans lui, cette commande ne lance rien.
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose.prod.yml up -d --no-build
+        chdir: "{{ app_dir }}"
+      when: domain | length > 0
+      register: compose_tls
+      changed_when: "'Started' in compose_tls.stderr or 'Created' in compose_tls.stderr"
+
+  handlers:
+    - name: Recharger Nginx
+      # Recharge à chaud : les connexions en cours ne sont pas coupées.
+      ansible.builtin.command: docker exec task-manager-frontend nginx -s reload
+      changed_when: true

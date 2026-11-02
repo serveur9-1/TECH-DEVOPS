@@ -1,0 +1,7 @@
+# Copier en inventory.ini et remplacer l'adresse par la sortie public_ip de
+# Terraform. Le fichier réel n'est pas versionné : il désigne un serveur réel.
+#
+#   cd ../terraform && terraform output -raw public_ip
+
+[app]
+203.0.113.10 ansible_user=ubuntu
