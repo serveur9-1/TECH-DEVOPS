@@ -1,0 +1,247 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissions minimales. Chaque job qui a besoin de plus les demande lui-même.
+permissions:
+  contents: read
+
+# Évite deux déploiements concurrents sur le même serveur.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Dépôt d'images, défini en variable de dépôt pour ne pas figer un compte
+  # dans le code. Exemple : « moncompte » sur Docker Hub.
+  REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE }}
+
+jobs:
+  lint:
+    name: Qualité du code
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Installer les outils de développement
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: Ruff — règles de style et erreurs probables
+        run: ruff check backend
+
+      - name: Ruff — formatage
+        run: ruff format --check backend
+
+      - name: Hadolint — Dockerfile du backend
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/Dockerfile
+
+      - name: Hadolint — Dockerfile du frontend
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/Dockerfile
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform — formatage et validation
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Ansible — contrôle syntaxique du playbook
+        working-directory: ansible
+        run: |
+          pip install ansible-core
+          cp inventory.ini.example inventory.ini
+          ansible-playbook --syntax-check playbook.yml
+
+  test:
+    name: Tests backend
+    runs-on: ubuntu-24.04
+    # Vrai PostgreSQL, et non un substitut : les tests valident le SQL
+    # réellement envoyé en production.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: tasks_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Même version que backend/Dockerfile, pour tester ce qui part en prod.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Installer les dépendances
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: Lancer pytest
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tasks_test
+        run: python -m pytest -v
+
+  security:
+    name: Analyse de sécurité du dépôt
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Trois analyses en une : dépendances vulnérables, secrets en clair et
+      # mauvaises configurations dans les Dockerfile, Compose et Terraform.
+      - name: Trivy — système de fichiers
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy-fs.sarif
+          # Ce passage produit le rapport ; c'est l'étape suivante qui décide
+          # d'échouer ou non.
+          exit-code: "0"
+
+      - name: Publier le rapport dans l'onglet Security
+        uses: github/codeql-action/upload-sarif@v3
+        # Le code scanning n'est pas disponible sur tous les plans : son
+        # absence ne doit pas faire échouer la pipeline.
+        continue-on-error: true
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Trivy — échec sur vulnérabilité critique corrigeable
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: CRITICAL
+          # Sans correctif publié, une alerte n'est pas actionnable : elle est
+          # signalée dans le rapport mais ne bloque pas la livraison.
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+  build:
+    name: Image ${{ matrix.name }}
+    needs: [lint, test, security]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+          # Contexte = racine du dépôt : l'image Nginx copie frontend/ et nginx/.
+          - name: frontend
+            context: .
+            dockerfile: ./frontend/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construire l'image localement
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          # Chargée dans le démon local : Trivy doit pouvoir l'inspecter avant
+          # qu'elle ne soit publiée.
+          load: true
+          push: false
+          tags: task-manager-${{ matrix.name }}:ci
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Trivy — analyse de l'image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: image
+          image-ref: task-manager-${{ matrix.name }}:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+      # Sur une Pull Request on s'arrête ici : pas de connexion au registre,
+      # donc aucun secret manipulé.
+      - name: Connexion à Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publier l'image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY_NAMESPACE }}/task-manager-${{ matrix.name }}:latest
+            ${{ env.REGISTRY_NAMESPACE }}/task-manager-${{ matrix.name }}:${{ github.sha }}
+          # Le cache de l'étape précédente est réutilisé : rien n'est
+          # reconstruit, l'image publiée est exactement celle qu'a vue Trivy.
+          cache-from: type=gha,scope=${{ matrix.name }}
+
+  deploy:
+    name: Déploiement
+    needs: build
+    # Runner auto-hébergé sur la VM : plus besoin d'ouvrir le port 22 aux
+    # plages d'IP des runners GitHub, c'est le runner qui sort vers GitHub.
+    runs-on: [self-hosted, Linux, X64, app-deploy]
+    # Désactivé par défaut. Ce job ne s'exécute que si la variable de dépôt
+    # DEPLOY_ENABLED vaut "true". Tant qu'elle est absente, le job est ignoré
+    # sans faire échouer la pipeline.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      vars.DEPLOY_ENABLED == 'true'
+    environment: production
+    # Pas de checkout : le déploiement n'utilise aucun fichier du dépôt. Le
+    # fichier Compose de production vit dans /opt/task-manager, en root:root,
+    # hors de portée de gha-runner.
+    steps:
+      - name: Déployer le tag ${{ github.sha }}
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        # Seule commande privilégiée autorisée par /etc/sudoers.d.
+        # -n : échoue au lieu d'attendre un mot de passe.
+        # Le tag passe par l'environnement plutôt que par une interpolation
+        # ${{ }} dans le script, et le script revalide sa valeur.
+        run: sudo -n /usr/local/sbin/task-manager-deploy "$IMAGE_TAG"
