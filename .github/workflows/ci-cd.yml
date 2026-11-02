@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Compte du registre, en variable de dépôt pour ne pas le figer dans le code.
-  REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE }}
+  # Même compte que le secret Docker Hub, pas de variable supplémentaire.
+  REGISTRY_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
 
 jobs:
   lint:
@@ -212,34 +212,12 @@ jobs:
     name: Déploiement
     needs: build
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request' &&
-      vars.DEPLOY_ENABLED == 'true' &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/'))
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-3' }}
       EC2_HOST: ${{ secrets.EC2_HOST }}
       EC2_USER: ${{ secrets.EC2_USER }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Autoriser SSH depuis l'IP du runner
-        id: sg
-        run: |
-          set -euo pipefail
-          IP=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
-          echo "runner_ip=$IP" >> "$GITHUB_OUTPUT"
-          aws ec2 authorize-security-group-ingress \
-            --group-id "${{ secrets.EC2_SECURITY_GROUP_ID }}" \
-            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${IP}/32,Description=gha-temp}]" \
-            || true
-          sleep 5
 
       - uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -260,7 +238,6 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
           REGISTRY_NAMESPACE: ${{ env.REGISTRY_NAMESPACE }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
@@ -270,7 +247,6 @@ jobs:
           {
             printf 'export IMAGE_TAG=%q\n' "$IMAGE_TAG"
             printf 'export REGISTRY_NAMESPACE=%q\n' "$REGISTRY_NAMESPACE"
-            printf 'export POSTGRES_PASSWORD=%q\n' "$POSTGRES_PASSWORD"
             printf 'export DOCKERHUB_USERNAME=%q\n' "$DOCKERHUB_USERNAME"
             printf 'export DOCKERHUB_TOKEN=%q\n' "$DOCKERHUB_TOKEN"
           } > "$DEPLOY_ENV"
@@ -284,14 +260,3 @@ jobs:
           set -euo pipefail
           curl -fsS --retry 10 --retry-delay 3 --max-time 5 "http://$EC2_HOST/healthz"
           curl -fsS --max-time 5 "http://$EC2_HOST/api/health"
-
-      - name: Retirer l'accès SSH temporaire
-        if: always()
-        run: |
-          set -euo pipefail
-          IP="${{ steps.sg.outputs.runner_ip }}"
-          [ -n "$IP" ] || exit 0
-          aws ec2 revoke-security-group-ingress \
-            --group-id "${{ secrets.EC2_SECURITY_GROUP_ID }}" \
-            --protocol tcp --port 22 --cidr "${IP}/32" \
-            || true
